@@ -1,10 +1,12 @@
 const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
 const { MongoClient } = require("mongodb");
 
+/* ================= CLIENT ================= */
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
+/* ================= ENV ================= */
 const {
   TOKEN,
   MONGO_URI,
@@ -14,87 +16,130 @@ const {
 
 let db;
 
-/* ===== TITLES ===== */
+/* ================= BASE COOLDOWNS (ms) ================= */
+let BASE_COOLDOWNS = {
+  drink: 60000,
+  casino: 45000,
+  dice: 30000
+};
+
+/* ================= TITLES ================= */
 const TITLES = [
-  { name: "Новичок", min: 0, color: 0x95a5a6, shop: 0, casino: 0, cd: 0 },
-  { name: "Завсегдатай", min: 50, color: 0x2ecc71, shop: 0.05, casino: 0.05, cd: 5000 },
-  { name: "Алкаш", min: 200, color: 0x3498db, shop: 0.1, casino: 0.1, cd: 10000 },
-  { name: "Легенда бара", min: 600, color: 0x9b59b6, shop: 0.2, casino: 0.2, cd: 20000 },
-  { name: "Король бара", min: 1500, color: 0xf1c40f, shop: 0.3, casino: 0.3, cd: Infinity }
+  { name: "Новичок", min: 0, color: 0x95a5a6, shop: 0, casino: 0, cdReduce: 0 },
+  { name: "Завсегдатай", min: 50, color: 0x2ecc71, shop: 0.05, casino: 0.05, cdReduce: 5000 },
+  { name: "Алкаш", min: 200, color: 0x3498db, shop: 0.1, casino: 0.1, cdReduce: 10000 },
+  { name: "Легенда бара", min: 600, color: 0x9b59b6, shop: 0.2, casino: 0.2, cdReduce: 20000 },
+  { name: "Король бара", min: 1500, color: 0xf1c40f, shop: 0.3, casino: 0.3, cdReduce: Infinity }
 ];
 
-const SHOP = {
-  пиво: { price: 0, min: 1, max: 1 },
-  виски: { price: 120, min: 4, max: 6 },
-  водка: { price: 300, min: 8, max: 14 },
-  самогон: { price: 700, min: -20, max: 40 },
-  абсент: { price: 1500, min: 30, max: 80 }
-};
-
-const BASE_CD = {
-  выпить: 60000,
-  казино: 60000,
-  кости: 45000
-};
-
-/* ===== HELPERS ===== */
 const getTitle = d => [...TITLES].reverse().find(t => d >= t.min);
 
-async function getUser(id) {
-  const col = db.collection("users");
-  let u = await col.findOne({ id });
+/* ================= DRINKS ================= */
+const DRINKS = {
+  beer: { name: "Пиво 🍺", base: 1 },
+  whiskey: { name: "Виски 🥃", base: 2 },
+  vodka: { name: "Водка 🍸", base: 3 }
+};
 
-  // если юзера нет — создаём
-  if (!u) {
-    u = {
-      id,
-      drinks: 0,
-      cooldowns: {},
-      title: "Новичок"
-    };
-    await col.insertOne(u);
-    return u;
-  }
+/* ================= SHOP ================= */
+const SHOP = {
+  beer: 50,
+  whiskey: 300,
+  vodka: 600
+};
 
-  // 🔥 ФИКС СТАРЫХ ПОЛЬЗОВАТЕЛЕЙ (ВОТ ИМЕННО ЭТОГО НЕ ХВАТАЛО)
-  if (!u.title) {
-    u.title = "Новичок";
-    await col.updateOne(
-      { id },
-      { $set: { title: "Новичок" } }
-    );
-  }
+/* ================= NPC BARTENDER ================= */
+const NPC = {
+  drink: ["Бармен: «За здоровье!» 🍻", "Бармен: «Хорош пошло» 😏"],
+  bonus: ["Бармен: «Фартовый сегодня!» 🎰"],
+  puke: ["Бармен: «Эй, не мешай…» 🤢"],
+  sleep: ["Бармен: «Уносим тело» 💀"],
+  event: ["Бармен: «Сегодня гуляем!» 🎉"]
+};
+const say = a => a[Math.floor(Math.random() * a.length)];
 
-  return u;
-}
+/* ================= EVENTS ================= */
+const EVENTS = [
+  { name: "Счастливый час", type: "drink", mult: 2 },
+  { name: "Алко-ночь", type: "casino", mult: 1.5 }
+];
 
-async function isAdmin(id) {
-  if (id === BOT_OWNER_ID) return true;
-  const a = await db.collection("admins").findOne({ id });
-  return !!a;
-}
-
-async function checkCooldown(user, cmd, title, admin) {
-  if (admin || title.cd === Infinity) return 0;
-  const last = user.cooldowns?.[cmd] || 0;
-  const cd = Math.max(0, BASE_CD[cmd] - title.cd);
-  if (Date.now() - last < cd) {
-    return Math.ceil((cd - (Date.now() - last)) / 1000);
-  }
-  await db.collection("users").updateOne(
-    { id: user.id },
-    { $set: { [`cooldowns.${cmd}`]: Date.now() } }
-  );
-  return 0;
-}
-
+/* ================= HELPERS ================= */
 async function log(msg) {
   if (!LOG_CHANNEL_ID) return;
   const ch = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
   if (ch) ch.send(msg);
 }
 
-/* ===== ROLES ===== */
+async function getUser(id) {
+  const col = db.collection("users");
+  let u = await col.findOne({ id });
+
+  if (!u) {
+    u = {
+      id,
+      drinks: 0,
+      balance: 0,
+      title: "Новичок",
+      inventory: { beer: 1 },
+      cooldowns: {}
+    };
+    await col.insertOne(u);
+  }
+
+  if (!u.title) {
+    u.title = "Новичок";
+    await col.updateOne({ id }, { $set: { title: "Новичок" } });
+  }
+
+  return u;
+}
+
+function getCooldownLeft(user, key, title, eventActive) {
+  if (title.cdReduce === Infinity) return 0;
+  if (eventActive) return 0;
+
+  const base = BASE_COOLDOWNS[key];
+  const reduce = title.cdReduce || 0;
+  const realCd = Math.max(0, base - reduce);
+
+  const last = user.cooldowns?.[key] || 0;
+  const passed = Date.now() - last;
+
+  return Math.max(0, realCd - passed);
+}
+
+async function setCooldown(user, key) {
+  await db.collection("users").updateOne(
+    { id: user.id },
+    { $set: { [`cooldowns.${key}`]: Date.now() } }
+  );
+}
+
+/* ================= EVENTS LOGIC ================= */
+async function getEvent() {
+  const ev = await db.collection("events").findOne({ active: true });
+  if (!ev) return null;
+  if (Date.now() > ev.until) {
+    await db.collection("events").deleteMany({});
+    await log(`⏹ Ивент **${ev.name}** закончился`);
+    return null;
+  }
+  return ev;
+}
+
+async function startEvent() {
+  if (await db.collection("events").findOne({ active: true })) return;
+  const ev = EVENTS[Math.floor(Math.random() * EVENTS.length)];
+  await db.collection("events").insertOne({
+    ...ev,
+    active: true,
+    until: Date.now() + 20 * 60 * 1000
+  });
+  await log(`🎉 Ивент **${ev.name}** начался!\n${say(NPC.event)}`);
+}
+
+/* ================= ROLES ================= */
 async function ensureRoles(guild) {
   if (!guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) return;
   for (const t of TITLES) {
@@ -106,6 +151,7 @@ async function ensureRoles(guild) {
 
 async function updateRole(member, user) {
   const title = getTitle(user.drinks);
+
   if (user.title !== title.name) {
     await db.collection("users").updateOne(
       { id: user.id },
@@ -123,11 +169,12 @@ async function updateRole(member, user) {
     if (r && member.roles.cache.has(r.id) && r.id !== newRole.id)
       await member.roles.remove(r).catch(() => {});
   }
+
   if (!member.roles.cache.has(newRole.id))
     await member.roles.add(newRole).catch(() => {});
 }
 
-/* ===== READY ===== */
+/* ================= READY ================= */
 client.once("ready", async () => {
   const mongo = new MongoClient(MONGO_URI);
   await mongo.connect();
@@ -139,160 +186,164 @@ client.once("ready", async () => {
   for (const g of client.guilds.cache.values()) {
     await ensureRoles(g);
   }
+
+  setInterval(startEvent, 30 * 60 * 1000);
 });
 
-/* ===== COMMANDS ===== */
+/* ================= COMMANDS ================= */
 client.on("interactionCreate", async i => {
   if (!i.isChatInputCommand()) return;
 
   const u = await getUser(i.user.id);
   const title = getTitle(u.drinks);
-  const admin = await isAdmin(i.user.id);
-  const owner = i.user.id === BOT_OWNER_ID;
+  const ev = await getEvent();
 
-  /* BASIC */
-  if (i.commandName === "баланс")
-    return i.reply(`💰 ${u.drinks} 🍺 | ${title.name}`);
-
+  /* ===== ВЫПИТЬ ===== */
   if (i.commandName === "выпить") {
-    const cd = await checkCooldown(u, "выпить", title, admin);
-    if (cd) return i.reply({ content:`⏳ ${cd} сек`, ephemeral:true });
-    u.drinks++;
-    await db.collection("users").updateOne({ id:u.id },{ $inc:{ drinks:1 }});
+    const drink = i.options.getString("напиток") || "beer";
+    if (!DRINKS[drink]) return i.reply("❌ Нет такого напитка");
+    if (!u.inventory[drink]) return i.reply("❌ У тебя его нет");
+
+    const cd = getCooldownLeft(u, "drink", title, ev);
+    if (cd > 0) return i.reply({ content:`⏳ ${Math.ceil(cd/1000)} сек`, ephemeral:true });
+
+    let gain = DRINKS[drink].base;
+    let txt = `🥃 Ты выпил **${DRINKS[drink].name}**\n${say(NPC.drink)}`;
+
+    if (Math.random() < 0.15) { gain++; txt += `\n${say(NPC.bonus)}`; }
+    if (Math.random() < 0.10) { gain--; txt += `\n${say(NPC.puke)}`; }
+    if (Math.random() < 0.05) { gain = 0; txt += `\n${say(NPC.sleep)}`; }
+
+    if (ev && ev.type === "drink") gain = Math.floor(gain * ev.mult);
+    gain = Math.max(0, gain);
+
+    u.inventory[drink]--;
+
+    await db.collection("users").updateOne(
+      { id: u.id },
+      {
+        $set: { inventory: u.inventory },
+        $inc: { drinks: gain, balance: gain * 20 }
+      }
+    );
+
+    await setCooldown(u, "drink");
     await updateRole(i.member, u);
-    return i.reply("🍺 +1");
+
+    return i.reply(`${txt}\n➡️ **+${gain} 🍺**`);
   }
 
+  /* ===== МАГАЗИН ===== */
+  if (i.commandName === "магазин") {
+    let t = "🛒 **Магазин**\n\n";
+    for (const k in SHOP) {
+      t += `${DRINKS[k].name} — ${Math.floor(SHOP[k] * (1 - title.shop))} 💰\n`;
+    }
+    return i.reply(t);
+  }
+
+  /* ===== КУПИТЬ ===== */
+  if (i.commandName === "купить") {
+    const item = i.options.getString("товар");
+    const price = Math.floor(SHOP[item] * (1 - title.shop));
+    if (!SHOP[item]) return i.reply("❌ Нет такого");
+    if (u.balance < price) return i.reply("❌ Мало денег");
+
+    u.inventory[item] = (u.inventory[item] || 0) + 1;
+    await db.collection("users").updateOne(
+      { id: u.id },
+      { $inc: { balance: -price }, $set: { inventory: u.inventory } }
+    );
+
+    return i.reply(`✅ Куплено: ${DRINKS[item].name}`);
+  }
+
+  /* ===== КАЗИНО ===== */
   if (i.commandName === "казино") {
     const bet = i.options.getInteger("ставка");
-    if (bet > u.drinks) return i.reply("❌ Мало 🍺");
-    const cd = await checkCooldown(u,"казино",title,admin);
-    if (cd) return i.reply({ content:`⏳ ${cd} сек`, ephemeral:true });
+    if (bet > u.balance) return i.reply("❌ Мало денег");
 
+    const cd = getCooldownLeft(u, "casino", title, ev);
+    if (cd > 0) return i.reply({ content:`⏳ ${Math.ceil(cd/1000)} сек`, ephemeral:true });
+
+    const mult = ev && ev.type === "casino" ? ev.mult : 1;
     const win = Math.random() < (0.45 + title.casino);
-    const delta = win ? Math.floor(bet * 1.5) : -bet;
+    const delta = win ? Math.floor(bet * 1.5 * mult) : -bet;
 
-    u.drinks = Math.max(0, u.drinks + delta);
-    await db.collection("users").updateOne({ id:u.id },{ $set:{ drinks:u.drinks }});
-    await updateRole(i.member, u);
+    await db.collection("users").updateOne({ id: u.id }, { $inc: { balance: delta } });
+    await setCooldown(u, "casino");
+
     return i.reply(win ? `🎰 WIN +${delta}` : `💸 LOSE ${-delta}`);
   }
 
+  /* ===== КОСТИ ===== */
   if (i.commandName === "кости") {
     const bet = i.options.getInteger("ставка");
-    if (bet > u.drinks) return i.reply("❌ Мало 🍺");
-    const cd = await checkCooldown(u,"кости",title,admin);
-    if (cd) return i.reply({ content:`⏳ ${cd} сек`, ephemeral:true });
+    if (bet > u.balance) return i.reply("❌ Мало денег");
 
-    const you = Math.ceil(Math.random()*6);
-    const bot = Math.ceil(Math.random()*6);
-    let delta = 0;
-    if (you > bot) delta = bet + Math.floor(bet * title.casino);
-    if (you < bot) delta = -bet;
+    const cd = getCooldownLeft(u, "dice", title, ev);
+    if (cd > 0) return i.reply({ content:`⏳ ${Math.ceil(cd/1000)} сек`, ephemeral:true });
 
-    u.drinks = Math.max(0, u.drinks + delta);
-    await db.collection("users").updateOne({ id:u.id },{ $set:{ drinks:u.drinks }});
-    await updateRole(i.member, u);
-    return i.reply(`🎲 Ты ${you} | Бар ${bot} → ${delta} 🍺`);
+    const you = Math.ceil(Math.random() * 6);
+    const bot = Math.ceil(Math.random() * 6);
+    const delta = you > bot ? bet : you < bot ? -bet : 0;
+
+    await db.collection("users").updateOne({ id: u.id }, { $inc: { balance: delta } });
+    await setCooldown(u, "dice");
+
+    return i.reply(`🎲 Ты ${you} | Бар ${bot} → ${delta}`);
   }
 
-  if (i.commandName === "магазин") {
-    let txt="🛒 Магазин:\n";
-    for (const [k,v] of Object.entries(SHOP)) {
-      txt+=`${k} — ${Math.floor(v.price*(1-title.shop))} 🍺\n`;
+  /* ===== ТОП ===== */
+  if (i.commandName === "топ") {
+    const col = db.collection("users");
+    const list = await col.find().sort({ drinks: -1 }).limit(10).toArray();
+    let t = "🏆 **Топ алкашей**\n\n";
+    for (let n = 0; n < list.length; n++) {
+      const x = list[n];
+      if (!x.title) {
+        await col.updateOne({ id: x.id }, { $set: { title: "Новичок" } });
+        x.title = "Новичок";
+      }
+      t += `${n + 1}. <@${x.id}> — ${x.drinks} 🍺 (${x.title})\n`;
     }
-    return i.reply(txt);
+    return i.reply(t);
   }
 
-  if (i.commandName === "купить") {
-    const item = i.options.getString("товар");
-    const d = SHOP[item];
-    if (!d) return i.reply("❌ Нет такого");
-    const price = Math.floor(d.price*(1-title.shop));
-    if (u.drinks < price) return i.reply("❌ Мало 🍺");
+  /* ===== SET CD (OWNER) ===== */
+  if (i.commandName === "set_cd") {
+    if (i.user.id !== BOT_OWNER_ID)
+      return i.reply({ content: "❌ Только овнер", ephemeral: true });
 
-    const gain = Math.floor(Math.random()*(d.max-d.min+1))+d.min;
-    u.drinks = Math.max(0,u.drinks-price+gain);
+    const cmd = i.options.getString("команда");
+    const sec = i.options.getInteger("секунды");
 
-    await db.collection("users").updateOne({ id:u.id },{ $set:{ drinks:u.drinks }});
-    await updateRole(i.member,u);
-    return i.reply(`🍻 ${item}: ${gain} → ${u.drinks}`);
+    BASE_COOLDOWNS[cmd] = sec * 1000;
+    await log(`⏱ Овнер изменил КД: ${cmd} = ${sec} сек`);
+
+    return i.reply(`✅ КД для **${cmd}** теперь **${sec} сек**`);
   }
 
- if (i.commandName === "топ") {
-  const col = db.collection("users");
+  /* ===== RESET ALL (OWNER) ===== */
+  if (i.commandName === "reset_all") {
+    if (i.user.id !== BOT_OWNER_ID)
+      return i.reply({ content: "❌ Только овнер", ephemeral: true });
 
-  const list = await col
-    .find({})
-    .sort({ drinks: -1 })
-    .limit(10)
-    .toArray();
+    await db.collection("users").updateMany(
+      {},
+      {
+        $set: {
+          drinks: 0,
+          balance: 0,
+          title: "Новичок",
+          inventory: { beer: 1 },
+          cooldowns: {}
+        }
+      }
+    );
 
-  let t = "🏆 **Топ алкашей**\n\n";
-
-  for (let index = 0; index < list.length; index++) {
-    const x = list[index];
-
-    // 🔥 ФИКС undefined
-    if (typeof x.drinks !== "number") {
-      x.drinks = 0;
-      await col.updateOne(
-        { id: x.id },
-        { $set: { drinks: 0 } }
-      );
-    }
-
-    if (!x.title) {
-      x.title = "Новичок";
-      await col.updateOne(
-        { id: x.id },
-        { $set: { title: "Новичок" } }
-      );
-    }
-
-    t += `${index + 1}. <@${x.id}> — **${x.drinks} 🍺** (${x.title})\n`;
-  }
-
-  return i.reply({ content: t });
-}
-
-  if (i.commandName === "help")
-    return i.reply("/баланс /выпить /казино /кости /магазин /купить /топ");
-
-  /* OWNER ONLY */
-  if (!owner) return;
-
-  if (i.commandName === "admin_add") {
-    const user=i.options.getUser("пользователь");
-    await db.collection("admins").updateOne({ id:user.id },{ $set:{ id:user.id }},{ upsert:true });
-    return i.reply(`✅ Админ добавлен: <@${user.id}>`);
-  }
-
-  if (i.commandName === "admin_delete") {
-    const user=i.options.getUser("пользователь");
-    await db.collection("admins").deleteOne({ id:user.id });
-    return i.reply(`❌ Админ удалён: <@${user.id}>`);
-  }
-
-  if (i.commandName === "money_give") {
-    const user=i.options.getUser("пользователь");
-    const a=i.options.getInteger("количество");
-    await getUser(user.id);
-    await db.collection("users").updateOne({ id:user.id },{ $inc:{ drinks:a }});
-    return i.reply(`➕ ${a} 🍺 <@${user.id}>`);
-  }
-
-  if (i.commandName === "money_take") {
-    const user=i.options.getUser("пользователь");
-    const a=i.options.getInteger("количество");
-    await db.collection("users").updateOne({ id:user.id },{ $inc:{ drinks:-a }});
-    return i.reply(`➖ ${a} 🍺 у <@${user.id}>`);
-  }
-
-  if (i.commandName === "money_reset") {
-    const user=i.options.getUser("пользователь");
-    await db.collection("users").updateOne({ id:user.id },{ $set:{ drinks:0 }});
-    return i.reply(`♻ Баланс сброшен: <@${user.id}>`);
+    await log("♻ **ОВНЕР СБРОСИЛ ВСЮ СТАТИСТИКУ**");
+    return i.reply("♻ **Вся статистика и титулы сброшены**");
   }
 });
 
