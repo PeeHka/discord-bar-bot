@@ -10,18 +10,17 @@ const client = new Client({
 
 const { TOKEN, MONGO_URI, BOT_OWNER_ID } = process.env;
 
-/* ===================== Mongo ===================== */
+/* ================= Mongo ================= */
 let db;
-const admins = new Set([BOT_OWNER_ID]);
 
-/* ===================== COOLDOWNS ===================== */
+/* ================= COOLDOWNS ================= */
 const COOLDOWNS = {
   выпить: 30_000,
   казино: 60_000,
   кости: 45_000
 };
 
-/* ===================== TITLES ===================== */
+/* ================= TITLES ================= */
 const TITLES = [
   { name: "👶 Новичок", role: "Новичок", need: 0, cdBonus: 0, shopDiscount: 0, color: 0x95a5a6 },
   { name: "🍺 Завсегдатай", role: "Завсегдатай", need: 50, cdBonus: 5_000, shopDiscount: 0.05, color: 0x2ecc71 },
@@ -30,17 +29,19 @@ const TITLES = [
   { name: "👑 Король бара", role: "Король бара", need: 1500, cdBonus: Infinity, shopDiscount: 0.30, color: 0xf1c40f }
 ];
 
-/* ===================== SHOP ===================== */
+/* ================= SHOP ================= */
 const SHOP = {
-  пиво: { price: 0, min: 1, max: 1, unlock: 0, desc: "Бесплатно" },
-  виски: { price: 120, min: 5, max: 5, unlock: 80, desc: "Медленно, но уверенно" },
-  водка: { price: 300, min: 12, max: 12, unlock: 250, desc: "Серьёзный ап" },
-  самогон: { price: 700, min: -20, max: 40, unlock: 600, desc: "Русская рулетка" },
-  абсент: { price: 1500, min: 30, max: 80, unlock: 1200, desc: "Конец здравого смысла" }
+  пиво: { price: 0, min: 1, max: 1, unlock: 0 },
+  виски: { price: 120, min: 5, max: 5, unlock: 80 },
+  водка: { price: 300, min: 12, max: 12, unlock: 250 },
+  самогон: { price: 700, min: -20, max: 40, unlock: 600 },
+  абсент: { price: 1500, min: 30, max: 80, unlock: 1200 }
 };
 
-/* ===================== HELPERS ===================== */
-const isAdmin = (id) => admins.has(id);
+/* ================= HELPERS ================= */
+function isOwner(id) {
+  return id === BOT_OWNER_ID;
+}
 
 function getTitle(user) {
   let t = TITLES[0];
@@ -71,7 +72,7 @@ async function getUser(id) {
   return u;
 }
 
-/* ===================== ROLES ===================== */
+/* ================= ROLES ================= */
 async function ensureTitleRoles(guild) {
   if (!guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) return;
 
@@ -81,7 +82,7 @@ async function ensureTitleRoles(guild) {
       await guild.roles.create({
         name: t.role,
         color: t.color,
-        reason: "Авто-роль титула"
+        reason: "Титул бара"
       });
     }
   }
@@ -117,10 +118,8 @@ async function updateTitle(member, user, channel) {
   }
 }
 
-/* ===================== COOLDOWN ===================== */
+/* ================= COOLDOWN ================= */
 async function checkCooldown(user, command, interaction) {
-  if (isAdmin(interaction.user.id)) return true;
-
   const title = getTitle(user);
   if (title.cdBonus === Infinity) return true;
 
@@ -138,45 +137,77 @@ async function checkCooldown(user, command, interaction) {
     { id: user.id },
     { $set: { [`cooldowns.${command}`]: now } }
   );
-
   return true;
 }
 
-/* ===================== READY ===================== */
+/* ================= READY ================= */
 client.once("ready", async () => {
+  console.log("🍃 MongoDB подключена");
   console.log("🍻 Бар-бот запущен");
+
   for (const g of client.guilds.cache.values()) {
     await ensureTitleRoles(g);
   }
 });
 
-/* ===================== COMMANDS ===================== */
+/* ================= COMMANDS ================= */
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   const name = interaction.commandName;
 
-  /* HELP */
+  /* ===== OWNER MONEY COMMANDS ===== */
+  if (["money_give", "money_take", "money_reset"].includes(name)) {
+    if (!isOwner(interaction.user.id)) {
+      return interaction.reply({ content: "❌ Только овнер.", ephemeral: true });
+    }
+
+    const user = interaction.options.getUser("пользователь");
+    const amount = interaction.options.getInteger("количество") || 0;
+
+    const target = await getUser(user.id);
+
+    if (name === "money_give") {
+      await db.collection("users").updateOne(
+        { id: user.id },
+        { $inc: { drinks: amount } }
+      );
+      return interaction.reply({ content: `✅ Выдано ${amount} 🍺`, ephemeral: true });
+    }
+
+    if (name === "money_take") {
+      const newBal = Math.max(0, target.drinks - amount);
+      await db.collection("users").updateOne(
+        { id: user.id },
+        { $set: { drinks: newBal } }
+      );
+      return interaction.reply({ content: `✅ Забрано ${amount} 🍺`, ephemeral: true });
+    }
+
+    if (name === "money_reset") {
+      await db.collection("users").updateOne(
+        { id: user.id },
+        { $set: { drinks: 0 } }
+      );
+      return interaction.reply({ content: "♻ Баланс сброшен", ephemeral: true });
+    }
+  }
+
+  /* ===== HELP ===== */
   if (name === "help") {
     return interaction.reply(
-`🍺 **Команды бара**
-/баланс
-/выпить
-/казино
-/кости
-/магазин
-/купить
-/титул
-/топ`
+`🍺 Команды бара:
+/баланс /выпить /казино /кости
+/магазин /купить /титул /топ`
     );
   }
 
-  /* BALANCE */
+  /* ===== BALANCE ===== */
   if (name === "баланс") {
     const u = await getUser(interaction.user.id);
     return interaction.reply(`💰 У тебя **${u.drinks} 🍺**`);
   }
 
-  /* ВЫПИТЬ */
+  /* ===== ВЫПИТЬ ===== */
   if (name === "выпить") {
     const u = await getUser(interaction.user.id);
     if (!(await checkCooldown(u, "выпить", interaction))) return;
@@ -189,16 +220,16 @@ client.on("interactionCreate", async (interaction) => {
     const nu = await getUser(u.id);
     await updateTitle(interaction.member, nu, interaction.channel);
 
-    return interaction.reply("🥃 Ты выпил и получил **+1 🍺**");
+    return interaction.reply("🥃 +1 🍺");
   }
 
-  /* КАЗИНО */
+  /* ===== КАЗИНО ===== */
   if (name === "казино") {
     const u = await getUser(interaction.user.id);
     if (!(await checkCooldown(u, "казино", interaction))) return;
 
-    const amount = Math.floor(Math.random() * 6) + 2;
     const win = Math.random() < 0.45;
+    const amount = Math.floor(Math.random() * 6) + 2;
     const delta = win ? amount : -Math.min(amount, u.drinks);
 
     await db.collection("users").updateOne(
@@ -210,11 +241,11 @@ client.on("interactionCreate", async (interaction) => {
     await updateTitle(interaction.member, nu, interaction.channel);
 
     return interaction.reply(
-      win ? `🎰 WIN **+${amount} 🍺**` : `💸 LOSE **${-delta} 🍺**`
+      win ? `🎰 WIN +${amount} 🍺` : `💸 LOSE ${-delta} 🍺`
     );
   }
 
-  /* КОСТИ */
+  /* ===== КОСТИ ===== */
   if (name === "кости") {
     const u = await getUser(interaction.user.id);
     if (!(await checkCooldown(u, "кости", interaction))) return;
@@ -234,25 +265,25 @@ client.on("interactionCreate", async (interaction) => {
     await updateTitle(interaction.member, nu, interaction.channel);
 
     return interaction.reply(
-      `🎲 Ты: ${you} | Бармен: ${bot}\nРезультат: **${delta >= 0 ? "+" : ""}${delta} 🍺**`
+      `🎲 Ты: ${you} | Бармен: ${bot}\nРезультат: ${delta} 🍺`
     );
   }
 
-  /* МАГАЗИН */
+  /* ===== МАГАЗИН ===== */
   if (name === "магазин") {
     const u = await getUser(interaction.user.id);
     const t = getTitle(u);
 
-    let text = "🛒 **Магазин бара**\n\n";
+    let text = "🛒 Магазин бара\n\n";
     for (const [k, v] of Object.entries(SHOP)) {
       if (u.drinks < v.unlock) continue;
       const price = Math.floor(v.price * (1 - t.shopDiscount));
-      text += `🍺 **${k}** — ${price} 🍺\n`;
+      text += `${k} — ${price} 🍺\n`;
     }
     return interaction.reply(text);
   }
 
-  /* КУПИТЬ */
+  /* ===== КУПИТЬ ===== */
   if (name === "купить") {
     const drink = interaction.options.getString("напиток");
     const item = SHOP[drink];
@@ -277,25 +308,25 @@ client.on("interactionCreate", async (interaction) => {
     await updateTitle(interaction.member, nu, interaction.channel);
 
     return interaction.reply(
-      `🍻 **${drink}**\nЦена: ${price}\nЭффект: ${gain}\nБаланс: **${newBal} 🍺**`
+      `🍻 ${drink}\nЦена: ${price}\nЭффект: ${gain}\nБаланс: ${newBal} 🍺`
     );
   }
 
-  /* ТИТУЛ */
+  /* ===== ТИТУЛ ===== */
   if (name === "титул") {
     const u = await getUser(interaction.user.id);
     const t = getTitle(u);
     return interaction.reply(
-      `🏷 **${t.name}**\n🍺 Напито: ${u.drinks}\n🎁 Скидка магазина: ${t.shopDiscount * 100}%`
+      `🏷 ${t.name}\n🍺 ${u.drinks}\n🎁 Скидка: ${t.shopDiscount * 100}%`
     );
   }
 
-  /* ТОП */
+  /* ===== ТОП ===== */
   if (name === "топ") {
     const users = await db.collection("users")
       .find().sort({ drinks: -1 }).limit(10).toArray();
 
-    let text = "🏆 **Топ бара**\n\n";
+    let text = "🏆 Топ бара\n\n";
     for (let i = 0; i < users.length; i++) {
       const t = getTitle(users[i]);
       text += `${i + 1}. ${t.name} | <@${users[i].id}> — ${users[i].drinks} 🍺\n`;
@@ -304,7 +335,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-/* ===================== START ===================== */
+/* ================= START ================= */
 (async () => {
   const mongo = new MongoClient(MONGO_URI);
   await mongo.connect();
