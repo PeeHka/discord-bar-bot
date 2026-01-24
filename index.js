@@ -216,6 +216,28 @@ client.on("messageCreate", async (m) => {
   }
 
   // 🎭 РОЛИ (ТОЛЬКО СОЗДАТЕЛЬ БОТА)
+  if (cmd === "роль") {
+    if (!isBotOwner(m)) return m.reply("❌ Только создатель бота.");
+
+    const action = args[0];
+    const member = m.mentions.members.first();
+    const role = m.mentions.roles.first();
+
+    if (!action || !member || !role)
+      return m.reply("Используй: `!роль дать|забрать @user @role`");
+
+    if (action === "дать") {
+      await member.roles.add(role);
+      return m.reply(`✅ Роль **${role.name}** выдана ${member.user.tag}`);
+    }
+
+    if (action === "забрать") {
+      await member.roles.remove(role);
+      return m.reply(`✅ Роль **${role.name}** забрана у ${member.user.tag}`);
+    }
+  }
+
+  // 🛡️ ПРАВА РОЛЕЙ (ТОЛЬКО СОЗДАТЕЛЬ БОТА)
   if (cmd === "права") {
   if (!isBotOwner(m.author.id))
     return m.reply("❌ Только создатель бота.");
@@ -244,30 +266,6 @@ client.on("messageCreate", async (m) => {
 
   await role.setPermissions(perms);
   return m.reply(`✅ Право **${perm}** ${action} роли **${role.name}**`);
-  }
-
-  // 🛡️ ПРАВА РОЛЕЙ (ТОЛЬКО СОЗДАТЕЛЬ БОТА)
-  if (cmd === "права") {
-    if (!isBotOwner(m)) return m.reply("❌ Только создатель бота.");
-
-    const action = args[0];
-    const role = m.mentions.roles.first();
-    const perm = args[2];
-
-    if (!action || !role || !perm)
-      return m.reply("Используй: `!права дать|забрать @role PERMISSION`");
-
-    if (!PermissionsBitField.Flags[perm])
-      return m.reply("❌ Такого права не существует.");
-
-    const perms = new PermissionsBitField(role.permissions);
-
-    if (action === "дать") perms.add(PermissionsBitField.Flags[perm]);
-    else if (action === "забрать") perms.remove(PermissionsBitField.Flags[perm]);
-    else return m.reply("❌ Действие: дать / забрать");
-
-    await role.setPermissions(perms);
-    return m.reply(`✅ Право **${perm}** ${action} роли **${role.name}**`);
   }
 });
 
