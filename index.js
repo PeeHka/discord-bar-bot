@@ -12,6 +12,7 @@ const { TOKEN, MONGO_URI, BOT_OWNER_ID } = process.env;
 
 /* ================= Mongo ================= */
 let db;
+const admins = new Set([BOT_OWNER_ID]);
 
 /* ================= COOLDOWNS ================= */
 const COOLDOWNS = {
@@ -39,9 +40,8 @@ const SHOP = {
 };
 
 /* ================= HELPERS ================= */
-function isOwner(id) {
-  return id === BOT_OWNER_ID;
-}
+const isOwner = (id) => id === BOT_OWNER_ID;
+const isAdmin = (id) => admins.has(id);
 
 function getTitle(user) {
   let t = TITLES[0];
@@ -120,6 +120,8 @@ async function updateTitle(member, user, channel) {
 
 /* ================= COOLDOWN ================= */
 async function checkCooldown(user, command, interaction) {
+  if (isAdmin(interaction.user.id)) return true;
+
   const title = getTitle(user);
   if (title.cdBonus === Infinity) return true;
 
@@ -145,6 +147,10 @@ client.once("ready", async () => {
   console.log("🍃 MongoDB подключена");
   console.log("🍻 Бар-бот запущен");
 
+  // загрузка админов
+  const list = await db.collection("admins").find().toArray();
+  list.forEach(a => admins.add(a.id));
+
   for (const g of client.guilds.cache.values()) {
     await ensureTitleRoles(g);
   }
@@ -155,7 +161,32 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   const name = interaction.commandName;
 
-  /* ===== OWNER MONEY COMMANDS ===== */
+  /* ===== ADMIN MANAGEMENT (OWNER ONLY) ===== */
+  if (["admin_add", "admin_delete"].includes(name)) {
+    if (!isOwner(interaction.user.id)) {
+      return interaction.reply({ content: "❌ Только овнер.", ephemeral: true });
+    }
+
+    const user = interaction.options.getUser("пользователь");
+
+    if (name === "admin_add") {
+      admins.add(user.id);
+      await db.collection("admins").updateOne(
+        { id: user.id },
+        { $set: { id: user.id } },
+        { upsert: true }
+      );
+      return interaction.reply({ content: `✅ ${user.tag} теперь админ`, ephemeral: true });
+    }
+
+    if (name === "admin_delete") {
+      admins.delete(user.id);
+      await db.collection("admins").deleteOne({ id: user.id });
+      return interaction.reply({ content: `🗑 ${user.tag} удалён из админов`, ephemeral: true });
+    }
+  }
+
+  /* ===== MONEY (OWNER ONLY) ===== */
   if (["money_give", "money_take", "money_reset"].includes(name)) {
     if (!isOwner(interaction.user.id)) {
       return interaction.reply({ content: "❌ Только овнер.", ephemeral: true });
@@ -163,7 +194,6 @@ client.on("interactionCreate", async (interaction) => {
 
     const user = interaction.options.getUser("пользователь");
     const amount = interaction.options.getInteger("количество") || 0;
-
     const target = await getUser(user.id);
 
     if (name === "money_give") {
@@ -171,7 +201,7 @@ client.on("interactionCreate", async (interaction) => {
         { id: user.id },
         { $inc: { drinks: amount } }
       );
-      return interaction.reply({ content: `✅ Выдано ${amount} 🍺`, ephemeral: true });
+      return interaction.reply({ content: `➕ ${amount} 🍺 выдано`, ephemeral: true });
     }
 
     if (name === "money_take") {
@@ -180,7 +210,7 @@ client.on("interactionCreate", async (interaction) => {
         { id: user.id },
         { $set: { drinks: newBal } }
       );
-      return interaction.reply({ content: `✅ Забрано ${amount} 🍺`, ephemeral: true });
+      return interaction.reply({ content: `➖ ${amount} 🍺 забрано`, ephemeral: true });
     }
 
     if (name === "money_reset") {
@@ -192,22 +222,20 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  /* ===== HELP ===== */
+  /* ===== BASIC COMMANDS ===== */
   if (name === "help") {
     return interaction.reply(
-`🍺 Команды бара:
+`🍺 Команды:
 /баланс /выпить /казино /кости
 /магазин /купить /титул /топ`
     );
   }
 
-  /* ===== BALANCE ===== */
   if (name === "баланс") {
     const u = await getUser(interaction.user.id);
-    return interaction.reply(`💰 У тебя **${u.drinks} 🍺**`);
+    return interaction.reply(`💰 ${u.drinks} 🍺`);
   }
 
-  /* ===== ВЫПИТЬ ===== */
   if (name === "выпить") {
     const u = await getUser(interaction.user.id);
     if (!(await checkCooldown(u, "выпить", interaction))) return;
@@ -219,11 +247,9 @@ client.on("interactionCreate", async (interaction) => {
 
     const nu = await getUser(u.id);
     await updateTitle(interaction.member, nu, interaction.channel);
-
     return interaction.reply("🥃 +1 🍺");
   }
 
-  /* ===== КАЗИНО ===== */
   if (name === "казино") {
     const u = await getUser(interaction.user.id);
     if (!(await checkCooldown(u, "казино", interaction))) return;
@@ -240,12 +266,9 @@ client.on("interactionCreate", async (interaction) => {
     const nu = await getUser(u.id);
     await updateTitle(interaction.member, nu, interaction.channel);
 
-    return interaction.reply(
-      win ? `🎰 WIN +${amount} 🍺` : `💸 LOSE ${-delta} 🍺`
-    );
+    return interaction.reply(win ? `🎰 WIN +${amount}` : `💸 LOSE ${-delta}`);
   }
 
-  /* ===== КОСТИ ===== */
   if (name === "кости") {
     const u = await getUser(interaction.user.id);
     if (!(await checkCooldown(u, "кости", interaction))) return;
@@ -264,17 +287,14 @@ client.on("interactionCreate", async (interaction) => {
     const nu = await getUser(u.id);
     await updateTitle(interaction.member, nu, interaction.channel);
 
-    return interaction.reply(
-      `🎲 Ты: ${you} | Бармен: ${bot}\nРезультат: ${delta} 🍺`
-    );
+    return interaction.reply(`🎲 Ты ${you} | Бармен ${bot} → ${delta} 🍺`);
   }
 
-  /* ===== МАГАЗИН ===== */
   if (name === "магазин") {
     const u = await getUser(interaction.user.id);
     const t = getTitle(u);
 
-    let text = "🛒 Магазин бара\n\n";
+    let text = "🛒 Магазин\n\n";
     for (const [k, v] of Object.entries(SHOP)) {
       if (u.drinks < v.unlock) continue;
       const price = Math.floor(v.price * (1 - t.shopDiscount));
@@ -283,7 +303,6 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.reply(text);
   }
 
-  /* ===== КУПИТЬ ===== */
   if (name === "купить") {
     const drink = interaction.options.getString("напиток");
     const item = SHOP[drink];
@@ -308,25 +327,23 @@ client.on("interactionCreate", async (interaction) => {
     await updateTitle(interaction.member, nu, interaction.channel);
 
     return interaction.reply(
-      `🍻 ${drink}\nЦена: ${price}\nЭффект: ${gain}\nБаланс: ${newBal} 🍺`
+      `🍻 ${drink}\nЦена: ${price}\nЭффект: ${gain}\nБаланс: ${newBal}`
     );
   }
 
-  /* ===== ТИТУЛ ===== */
   if (name === "титул") {
     const u = await getUser(interaction.user.id);
     const t = getTitle(u);
     return interaction.reply(
-      `🏷 ${t.name}\n🍺 ${u.drinks}\n🎁 Скидка: ${t.shopDiscount * 100}%`
+      `🏷 ${t.name}\n🍺 ${u.drinks}\n🎁 Скидка ${t.shopDiscount * 100}%`
     );
   }
 
-  /* ===== ТОП ===== */
   if (name === "топ") {
     const users = await db.collection("users")
       .find().sort({ drinks: -1 }).limit(10).toArray();
 
-    let text = "🏆 Топ бара\n\n";
+    let text = "🏆 Топ\n\n";
     for (let i = 0; i < users.length; i++) {
       const t = getTitle(users[i]);
       text += `${i + 1}. ${t.name} | <@${users[i].id}> — ${users[i].drinks} 🍺\n`;
