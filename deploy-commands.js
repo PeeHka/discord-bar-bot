@@ -1,65 +1,70 @@
 const { REST, Routes, SlashCommandBuilder } = require("discord.js");
-const { TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
 const commands = [
-  new SlashCommandBuilder().setName("help").setDescription("Помощь"),
-  new SlashCommandBuilder().setName("баланс").setDescription("Баланс"),
-  new SlashCommandBuilder().setName("выпить").setDescription("Выпить"),
-  new SlashCommandBuilder().setName("казино").setDescription("Казино"),
-  new SlashCommandBuilder().setName("кости").setDescription("Кости"),
-  new SlashCommandBuilder().setName("магазин").setDescription("Магазин"),
+  new SlashCommandBuilder().setName("выпить").setDescription("Выпить алкоголь"),
+  new SlashCommandBuilder().setName("баланс").setDescription("Посмотреть баланс"),
+  new SlashCommandBuilder().setName("топ").setDescription("Топ алкашей"),
+  new SlashCommandBuilder().setName("магазин").setDescription("Магазин алкоголя"),
+
   new SlashCommandBuilder()
     .setName("купить")
-    .setDescription("Купить напиток")
+    .setDescription("Купить алкоголь")
     .addStringOption(o =>
-      o.setName("напиток")
-        .setRequired(true)
-        .addChoices(
-          { name: "пиво", value: "пиво" },
-          { name: "виски", value: "виски" },
-          { name: "водка", value: "водка" },
-          { name: "самогон", value: "самогон" },
-          { name: "абсент", value: "абсент" }
-        )
+      o.setName("товар").setDescription("Название").setRequired(true)
     ),
-  new SlashCommandBuilder().setName("титул").setDescription("Титул"),
-  new SlashCommandBuilder().setName("топ").setDescription("Топ"),
 
-  // OWNER ONLY
+  new SlashCommandBuilder()
+    .setName("казино")
+    .setDescription("Сыграть в казино")
+    .addIntegerOption(o =>
+      o.setName("ставка").setDescription("Ставка").setRequired(true)
+    ),
+
+  new SlashCommandBuilder().setName("кости").setDescription("Сыграть в кости"),
+  new SlashCommandBuilder().setName("help").setDescription("Помощь"),
+
+  // OWNER
   new SlashCommandBuilder()
     .setName("admin_add")
-    .setDescription("Добавить админа (овнер)")
-    .addUserOption(o => o.setName("пользователь").setRequired(true)),
+    .setDescription("Добавить админа")
+    .addUserOption(o =>
+      o.setName("user").setDescription("Кого").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("admin_delete")
-    .setDescription("Удалить админа (овнер)")
-    .addUserOption(o => o.setName("пользователь").setRequired(true)),
+    .setDescription("Удалить админа")
+    .addUserOption(o =>
+      o.setName("user").setDescription("Кого").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("money_give")
-    .setDescription("Выдать валюту (овнер)")
-    .addUserOption(o => o.setName("пользователь").setRequired(true))
-    .addIntegerOption(o => o.setName("количество").setRequired(true)),
+    .setDescription("Выдать валюту")
+    .addUserOption(o => o.setName("user").setDescription("Кому").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("Сколько").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("money_take")
-    .setDescription("Забрать валюту (овнер)")
-    .addUserOption(o => o.setName("пользователь").setRequired(true))
-    .addIntegerOption(o => o.setName("количество").setRequired(true)),
+    .setDescription("Забрать валюту")
+    .addUserOption(o => o.setName("user").setDescription("У кого").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("Сколько").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("money_reset")
-    .setDescription("Сбросить валюту (овнер)")
-    .addUserOption(o => o.setName("пользователь").setRequired(true))
-].map(c => c.toJSON());
+    .setDescription("Сбросить валюту")
+    .addUserOption(o => o.setName("user").setDescription("Кому").setRequired(true)),
+];
 
-const rest = new REST({ version: "10" }).setToken(TOKEN);
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 (async () => {
   await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
+    Routes.applicationGuildCommands(
+      process.env.CLIENT_ID,
+      process.env.GUILD_ID
+    ),
+    { body: commands.map(c => c.toJSON()) }
   );
-  console.log("✅ Slash-команды обновлены");
+  console.log("✅ Slash-команды зарегистрированы");
 })();
