@@ -1,97 +1,52 @@
-const { REST, Routes, SlashCommandBuilder } = require("discord.js");
+import { REST, Routes, SlashCommandBuilder } from "discord.js";
 
 const { TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
 const commands = [
-
   new SlashCommandBuilder()
     .setName("выпить")
-    .setDescription("Выпить алкоголь")
+    .setDescription("Выпить напиток")
     .addStringOption(o =>
       o.setName("напиток")
-        .setDescription("Что будем пить")
+        .setDescription("Что пить")
         .setRequired(false)
         .addChoices(
-          { name: "Пиво 🍺", value: "beer" },
-          { name: "Виски 🥃", value: "whiskey" },
-          { name: "Водка 🍸", value: "vodka" }
+          { name:"Пиво", value:"beer" },
+          { name:"Сидр", value:"cider" },
+          { name:"Виски", value:"whiskey" },
+          { name:"Ром", value:"rum" },
+          { name:"Водка", value:"vodka" },
+          { name:"Абсент", value:"absinthe" }
         )
     ),
 
-  new SlashCommandBuilder()
-    .setName("магазин")
-    .setDescription("Магазин алкоголя"),
-
+  new SlashCommandBuilder().setName("магазин").setDescription("Магазин"),
   new SlashCommandBuilder()
     .setName("купить")
     .setDescription("Купить напиток")
     .addStringOption(o =>
-      o.setName("товар")
-        .setDescription("Что купить")
+      o.setName("предмет")
+        .setDescription("Название")
         .setRequired(true)
         .addChoices(
-          { name: "Пиво 🍺", value: "beer" },
-          { name: "Виски 🥃", value: "whiskey" },
-          { name: "Водка 🍸", value: "vodka" }
+          { name:"Пиво", value:"beer" },
+          { name:"Сидр", value:"cider" },
+          { name:"Виски", value:"whiskey" },
+          { name:"Ром", value:"rum" },
+          { name:"Водка", value:"vodka" },
+          { name:"Абсент", value:"absinthe" }
         )
     ),
 
-  new SlashCommandBuilder()
-    .setName("казино")
-    .setDescription("Сыграть в казино")
-    .addIntegerOption(o =>
-      o.setName("ставка")
-        .setDescription("Сумма ставки")
-        .setRequired(true)
-    ),
+  new SlashCommandBuilder().setName("казино").setDescription("Казино"),
+  new SlashCommandBuilder().setName("кости").setDescription("Кости"),
+  new SlashCommandBuilder().setName("топ").setDescription("Топ алкашей"),
+  new SlashCommandBuilder().setName("reset_all").setDescription("Сброс всего (овнер)")
+].map(c=>c.toJSON());
 
-  new SlashCommandBuilder()
-    .setName("кости")
-    .setDescription("Сыграть в кости")
-    .addIntegerOption(o =>
-      o.setName("ставка")
-        .setDescription("Сумма ставки")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("топ")
-    .setDescription("Топ алкашей"),
-
-  new SlashCommandBuilder()
-    .setName("set_cd")
-    .setDescription("Изменить кулдаун (ОВНЕР)")
-    .addStringOption(o =>
-      o.setName("команда")
-        .setDescription("Для какой команды")
-        .setRequired(true)
-        .addChoices(
-          { name: "выпить", value: "drink" },
-          { name: "казино", value: "casino" },
-          { name: "кости", value: "dice" }
-        )
-    )
-    .addIntegerOption(o =>
-      o.setName("секунды")
-        .setDescription("Новый кулдаун в секундах")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("reset_all")
-    .setDescription("СБРОС ВСЕЙ СТАТИСТИКИ (ОВНЕР)")
-];
-
-const rest = new REST({ version: "10" }).setToken(TOKEN);
-
-(async () => {
-  try {
-    await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-      { body: commands.map(c => c.toJSON()) }
-    );
-    console.log("✅ Slash-команды успешно зарегистрированы");
-  } catch (e) {
-    console.error("❌ Ошибка регистрации команд:", e);
-  }
-})();
+const rest = new REST({ version:"10" }).setToken(TOKEN);
+await rest.put(
+  Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+  { body: commands }
+);
+console.log("✅ Slash-команды обновлены");
