@@ -43,10 +43,28 @@ const getTitle = d => [...TITLES].reverse().find(t => d >= t.min);
 async function getUser(id) {
   const col = db.collection("users");
   let u = await col.findOne({ id });
+
+  // если юзера нет — создаём
   if (!u) {
-    u = { id, drinks: 0, cooldowns: {}, title: "Новичок" };
+    u = {
+      id,
+      drinks: 0,
+      cooldowns: {},
+      title: "Новичок"
+    };
     await col.insertOne(u);
+    return u;
   }
+
+  // 🔥 ФИКС СТАРЫХ ПОЛЬЗОВАТЕЛЕЙ (ВОТ ИМЕННО ЭТОГО НЕ ХВАТАЛО)
+  if (!u.title) {
+    u.title = "Новичок";
+    await col.updateOne(
+      { id },
+      { $set: { title: "Новичок" } }
+    );
+  }
+
   return u;
 }
 
