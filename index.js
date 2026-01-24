@@ -1,276 +1,262 @@
 const {
   Client,
   GatewayIntentBits,
-  EmbedBuilder,
-  PermissionsBitField
+  PermissionFlagsBits,
+  EmbedBuilder
 } = require("discord.js");
 const { MongoClient } = require("mongodb");
 
 // ===== ENV =====
-const TOKEN = process.env.TOKEN;
-const MONGO_URI = process.env.MONGO_URI;
-const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
-const BOT_OWNER_ID = process.env.BOT_OWNER_ID;
-const PREFIX = "!";
+const {
+  TOKEN,
+  CLIENT_ID,
+  GUILD_ID,
+  BOT_OWNER_ID,
+  MONGO_URI
+} = process.env;
 
 // ===== CLIENT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers
   ]
 });
 
 // ===== MONGO =====
 const mongo = new MongoClient(MONGO_URI);
-let users;
+let db;
 
-async function initMongo() {
-  await mongo.connect();
-  const db = mongo.db("barbot");
-  users = db.collection("users");
-  console.log("🍃 MongoDB подключена");
-}
-
+// ===== DB HELPERS =====
 async function getUser(id) {
-  let user = await users.findOne({ id });
-  if (!user) {
-    user = { id, balance: 0, earned: [] };
-    await users.insertOne(user);
+  const col = db.collection("users");
+  let u = await col.findOne({ id });
+  if (!u) {
+    u = { id, balance: 0 };
+    await col.insertOne(u);
   }
-  return user;
+  return u;
 }
 
-// ===== АНТИНАКРУТКА =====
-async function canEarn(id, amount) {
-  const user = await getUser(id);
-  const now = Date.now();
+async function isBotAdmin(id) {
+  if (id === BOT_OWNER_ID) return true;
+  const a = await db.collection("admins").findOne({ id });
+  return !!a;
+}
 
-  const earned = user.earned
-    .filter(e => now - e.time < 10 * 60 * 1000)
-    .slice(-20);
-
-  const total = earned.reduce((s, e) => s + e.amount, 0);
-  if (total + amount > 50) return false;
-
-  earned.push({ amount, time: now });
-
-  await users.updateOne(
+async function addAdmin(id) {
+  await db.collection("admins").updateOne(
     { id },
-    { $set: { earned } }
+    { $set: { id } },
+    { upsert: true }
   );
-
-  return true;
 }
 
-// ===== LOGS =====
-function log(guild, title, text, color = 0xf1c40f) {
-  if (!LOG_CHANNEL_ID) return;
-  const ch = guild.channels.cache.get(LOG_CHANNEL_ID);
-  if (!ch) return;
-
-  ch.send({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle(title)
-        .setDescription(text)
-        .setColor(color)
-        .setTimestamp()
-    ]
-  });
+async function removeAdmin(id) {
+  await db.collection("admins").deleteOne({ id });
 }
-
-// ===== COOLDOWN =====
-const cooldown = new Set();
-function onCooldown(id) {
-  if (cooldown.has(id)) return true;
-  cooldown.add(id);
-  setTimeout(() => cooldown.delete(id), 3000);
-  return false;
-}
-
-// ===== BOT OWNER CHECK =====
-function isBotOwner(m) {
-  return m.author.id === BOT_OWNER_ID;
-}
-
-// ===== DRINKS =====
-const drinks = {
-  пиво: [1, 3],
-  водка: [3, 6],
-  виски: [2, 5],
-  ром: [2, 4],
-  самогон: [-3, 8]
-};
 
 // ===== READY =====
-client.once("ready", () => {
+client.once("ready", async () => {
+  await mongo.connect();
+  db = mongo.db("barbot");
+  console.log("🍃 MongoDB подключена");
   console.log("🍻 Бар-бот запущен");
-  client.user.setActivity("наливает 🍺");
 });
 
-// ===== COMMANDS =====
-client.on("messageCreate", async (m) => {
-  if (m.author.bot || !m.content.startsWith(PREFIX)) return;
-  if (onCooldown(m.author.id)) return;
+// ===== INTERACTIONS =====
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand()) return;
+  await i.deferReply({ ephemeral: true });
 
-  const args = m.content.slice(1).trim().split(/ +/);
-  const cmd = args.shift().toLowerCase();
+  const name = i.commandName;
 
-  // 🍹 ВЫПИТЬ
-  if (cmd === "выпить") {
-    const name = args[0] || Object.keys(drinks)[Math.floor(Math.random() * Object.keys(drinks).length)];
-    if (!drinks[name]) return m.reply("Такого пойла нет 🍺");
+  try {
+    // ===== HELP =====
+    if (name === "help") {
+      return i.editReply(
+        `📖 **Команды бота**
 
-    const [min, max] = drinks[name];
-    const gain = Math.floor(Math.random() * (max - min + 1)) + min;
+💰 /баланс  
+🍺 /выпить  
+🎰 /казино  
+🎲 /кости  
+🏆 /топ  
 
-    if (gain > 0 && !(await canEarn(m.author.id, gain))) {
-      log(m.guild, "🛑 Антинакрутка", `👤 ${m.author.tag}\nПопытка +${gain} 🍺`, 0xe74c3c);
-      return m.reply("🛑 Притормози.");
+😄 /шутка  
+🎱 /шар  
+🍺 /напиться  
+
+Админка скрыта 😎`
+      );
     }
 
-    await users.updateOne(
-      { id: m.author.id },
-      { $inc: { balance: gain } },
-      { upsert: true }
-    );
-
-    const user = await getUser(m.author.id);
-    if (user.balance < 0)
-      await users.updateOne({ id: m.author.id }, { $set: { balance: 0 } });
-
-    m.reply(`🍹 ${name} → **${gain} 🍺**`);
-  }
-
-  // 💰 БАЛАНС
-  if (cmd === "баланс") {
-    const user = await getUser(m.author.id);
-    return m.reply(`💰 У тебя **${user.balance} 🍺**`);
-  }
-
-  // 🎡 РУЛЕТКА
-  if (cmd === "рулетка") {
-    const bet = parseInt(args[0]);
-    const user = await getUser(m.author.id);
-
-    if (!bet || bet <= 0 || bet > user.balance)
-      return m.reply("Ставка говно.");
-
-    const win = Math.random() < 0.5;
-    await users.updateOne(
-      { id: m.author.id },
-      { $inc: { balance: win ? bet : -bet } }
-    );
-
-    m.reply(win ? `🎡 WIN → +${bet} 🍺` : `💀 LOSE → -${bet} 🍺`);
-  }
-
-  // 🎲 КОСТИ
-  if (cmd === "кости") {
-    const bet = parseInt(args[0]);
-    const user = await getUser(m.author.id);
-
-    if (!bet || bet <= 0 || bet > user.balance)
-      return m.reply("Ставка хуйня.");
-
-    const you = Math.floor(Math.random() * 6) + 1;
-    const bot = Math.floor(Math.random() * 6) + 1;
-
-    let diff = 0;
-    if (you > bot) diff = bet;
-    else if (you < bot) diff = -bet;
-
-    await users.updateOne(
-      { id: m.author.id },
-      { $inc: { balance: diff } }
-    );
-
-    m.reply(`🎲 Ты ${you} | Бармен ${bot} → **${diff} 🍺**`);
-  }
-
-  // 🏆 ТОП
-  if (cmd === "топ") {
-    const top = await users.find().sort({ balance: -1 }).limit(5).toArray();
-    let text = "";
-
-    for (let i = 0; i < top.length; i++) {
-      let name = "Удалённый";
-      try {
-        const usr = await client.users.fetch(top[i].id);
-        name = usr.username;
-      } catch {}
-      text += `**${i + 1}.** ${name} — ${top[i].balance} 🍺\n`;
+    // ===== ECONOMY =====
+    if (name === "баланс") {
+      const u = await getUser(i.user.id);
+      return i.editReply(`💰 Баланс: **${u.balance} 🍺**`);
     }
 
-    m.channel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🏆 Топ алкашей")
-          .setDescription(text || "Пусто")
-          .setColor(0xf1c40f)
-      ]
-    });
-  }
+    if (name === "выпить") {
+      const drinks = {
+        пиво: [1, 3],
+        виски: [2, 5],
+        водка: [3, 6],
+        самогон: [-3, 8]
+      };
+      const d = i.options.getString("напиток") || "пиво";
+      if (!drinks[d]) return i.editReply("❌ Такого напитка нет.");
 
-  // 🎭 РОЛИ (ТОЛЬКО СОЗДАТЕЛЬ БОТА)
-  if (cmd === "роль") {
-    if (!isBotOwner(m)) return m.reply("❌ Только создатель бота.");
+      const [min, max] = drinks[d];
+      const gain = Math.floor(Math.random() * (max - min + 1)) + min;
 
-    const action = args[0];
-    const member = m.mentions.members.first();
-    const role = m.mentions.roles.first();
+      const u = await getUser(i.user.id);
+      u.balance = Math.max(0, u.balance + gain);
 
-    if (!action || !member || !role)
-      return m.reply("Используй: `!роль дать|забрать @user @role`");
+      await db.collection("users").updateOne(
+        { id: u.id },
+        { $set: { balance: u.balance } }
+      );
 
-    if (action === "дать") {
-      await member.roles.add(role);
-      return m.reply(`✅ Роль **${role.name}** выдана ${member.user.tag}`);
+      return i.editReply(`🍺 ${d} → **${gain} 🍺**`);
     }
 
-    if (action === "забрать") {
-      await member.roles.remove(role);
-      return m.reply(`✅ Роль **${role.name}** забрана у ${member.user.tag}`);
+    if (name === "казино") {
+      const bet = i.options.getInteger("ставка");
+      const u = await getUser(i.user.id);
+      if (bet <= 0 || bet > u.balance)
+        return i.editReply("❌ Ставка некорректна.");
+
+      const win = Math.random() < 0.5;
+      u.balance += win ? bet : -bet;
+
+      await db.collection("users").updateOne(
+        { id: u.id },
+        { $set: { balance: u.balance } }
+      );
+
+      return i.editReply(win ? `🎰 WIN +${bet}` : `💀 LOSE -${bet}`);
     }
-  }
 
-  // 🛡️ ПРАВА РОЛЕЙ (ТОЛЬКО СОЗДАТЕЛЬ БОТА)
-  if (cmd === "права") {
-  if (!isBotOwner(m.author.id))
-    return m.reply("❌ Только создатель бота.");
+    if (name === "кости") {
+      const bet = i.options.getInteger("ставка");
+      const u = await getUser(i.user.id);
+      if (bet <= 0 || bet > u.balance)
+        return i.editReply("❌ Ставка некорректна.");
 
-  const action = args[0]; // дать / забрать
-  const role = m.mentions.roles.first();
+      const you = Math.ceil(Math.random() * 6);
+      const bot = Math.ceil(Math.random() * 6);
+      let res = 0;
+      if (you > bot) res = bet;
+      else if (you < bot) res = -bet;
 
-  // ищем право — ВСЕГДА капсом
-  const perm = args.find(a => a === a.toUpperCase());
+      u.balance += res;
+      await db.collection("users").updateOne(
+        { id: u.id },
+        { $set: { balance: u.balance } }
+      );
 
-  if (!action || !role || !perm)
-    return m.reply("Используй: `!права дать|забрать @роль PERMISSION`");
+      return i.editReply(`🎲 Ты: ${you} | Бот: ${bot} → **${res} 🍺**`);
+    }
 
-  if (!PermissionsBitField.Flags[perm])
-    return m.reply(`❌ Такого права не существует: ${perm}`);
+    if (name === "топ") {
+      const top = await db.collection("users")
+        .find().sort({ balance: -1 }).limit(5).toArray();
 
-  const perms = new PermissionsBitField(role.permissions);
+      if (!top.length) return i.editReply("Пусто.");
 
-  if (action === "дать") {
-    perms.add(PermissionsBitField.Flags[perm]);
-  } else if (action === "забрать") {
-    perms.remove(PermissionsBitField.Flags[perm]);
-  } else {
-    return m.reply("❌ Действие: дать / забрать");
-  }
+      return i.editReply(
+        top.map((u, i) =>
+          `**${i + 1}.** <@${u.id}> — ${u.balance} 🍺`
+        ).join("\n")
+      );
+    }
 
-  await role.setPermissions(perms);
-  return m.reply(`✅ Право **${perm}** ${action} роли **${role.name}**`);
+    // ===== FUN =====
+    if (name === "шутка") {
+      const jokes = [
+        "Бармен не судит. Бармен наливает.",
+        "Пей ответственно. Но это не точно.",
+        "Алкоголь — враг. Но врагов надо знать в лицо."
+      ];
+      return i.editReply(jokes[Math.floor(Math.random() * jokes.length)]);
+    }
+
+    if (name === "шар") {
+      const answers = [
+        "Да",
+        "Нет",
+        "Спроси позже",
+        "Определённо",
+        "Лучше не надо"
+      ];
+      return i.editReply(`🎱 ${answers[Math.floor(Math.random() * answers.length)]}`);
+    }
+
+    if (name === "напиться") {
+      return i.editReply("🥴 Ты уже напился. Иди домой.");
+    }
+
+    // ===== ADMIN ADD / DELETE (ONLY OWNER) =====
+    if (name === "admin_add") {
+      if (i.user.id !== BOT_OWNER_ID)
+        return i.editReply("❌ Только овнер.");
+
+      const user = i.options.getUser("пользователь");
+      await addAdmin(user.id);
+      return i.editReply(`✅ ${user.tag} теперь админ бота`);
+    }
+
+    if (name === "admin_delete") {
+      if (i.user.id !== BOT_OWNER_ID)
+        return i.editReply("❌ Только овнер.");
+
+      const user = i.options.getUser("пользователь");
+      await removeAdmin(user.id);
+      return i.editReply(`🗑️ ${user.tag} удалён из админов`);
+    }
+
+    // ===== ROLE / PERMS (ADMINS) =====
+    if (
+      ["роль_выдать", "роль_забрать", "права_дать", "права_забрать"].includes(name)
+      && !(await isBotAdmin(i.user.id))
+    ) {
+      return i.editReply("❌ Нет доступа.");
+    }
+
+    if (name === "роль_выдать") {
+      const m = i.options.getMember("пользователь");
+      const r = i.options.getRole("роль");
+      await m.roles.add(r);
+      return i.editReply("✅ Роль выдана");
+    }
+
+    if (name === "роль_забрать") {
+      const m = i.options.getMember("пользователь");
+      const r = i.options.getRole("роль");
+      await m.roles.remove(r);
+      return i.editReply("✅ Роль забрана");
+    }
+
+    if (name === "права_дать" || name === "права_забрать") {
+      const role = i.options.getRole("роль");
+      const perm = i.options.getString("право");
+      if (!PermissionFlagsBits[perm])
+        return i.editReply("❌ Нет такого права.");
+
+      const newPerms =
+        name === "права_дать"
+          ? role.permissions.add(PermissionFlagsBits[perm])
+          : role.permissions.remove(PermissionFlagsBits[perm]);
+
+      await role.setPermissions(newPerms);
+      return i.editReply("✅ Права обновлены");
+    }
+
+  } catch (e) {
+    console.error(e);
+    return i.editReply("❌ Ошибка.");
   }
 });
 
-// ===== START =====
-(async () => {
-  await initMongo();
-  await client.login(TOKEN);
-})();
+client.login(TOKEN);
