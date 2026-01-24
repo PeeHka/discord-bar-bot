@@ -1,13 +1,14 @@
 {
-  "name": "bar-bot-mongo",
-  "version": "2.0.0",
+  "name": "discord-bar-bot",
+  "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
+    "discord.js": "^14.15.0",
     "mongodb": "^6.5.0"
   }
 }
