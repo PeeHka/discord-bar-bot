@@ -10,7 +10,6 @@ if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
 }
 
 const commands = [
-
   new SlashCommandBuilder()
     .setName("help")
     .setDescription("Показать список команд"),
@@ -90,3 +89,30 @@ const commands = [
         )
     )
     .addSubcommand(s =>
+      s.setName("забрать")
+        .setDescription("Убрать право роли")
+        .addRoleOption(o =>
+          o.setName("роль").setDescription("Роль").setRequired(true)
+        )
+        .addStringOption(o =>
+          o.setName("право")
+            .setDescription("Например: MANAGE_ROLES")
+            .setRequired(true)
+        )
+    ),
+];
+
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+(async () => {
+  try {
+    console.log("⏳ Регистрирую slash-команды...");
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      { body: commands.map(c => c.toJSON()) }
+    );
+    console.log("✅ Slash-команды зарегистрированы");
+  } catch (err) {
+    console.error("❌ Ошибка регистрации:", err);
+  }
+})();
