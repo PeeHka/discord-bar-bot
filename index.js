@@ -1,182 +1,269 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
-const fs = require("fs");
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  PermissionsBitField
+} = require("discord.js");
+const { MongoClient } = require("mongodb");
 
+// ===== ENV =====
+const TOKEN = process.env.TOKEN;
+const MONGO_URI = process.env.MONGO_URI;
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+const BOT_OWNER_ID = process.env.BOT_OWNER_ID;
+const PREFIX = "!";
+
+// ===== CLIENT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
   ]
 });
 
-const prefix = "!";
-const FILE = "./economy.json";
+// ===== MONGO =====
+const mongo = new MongoClient(MONGO_URI);
+let users;
 
-// ===== ДАННЫЕ =====
-let data = fs.existsSync(FILE)
-  ? JSON.parse(fs.readFileSync(FILE))
-  : {};
-
-function save() {
-  fs.writeFileSync(FILE, JSON.stringify(data, null, 2));
+async function initMongo() {
+  await mongo.connect();
+  const db = mongo.db("barbot");
+  users = db.collection("users");
+  console.log("🍃 MongoDB подключена");
 }
 
-function getUser(id) {
-  if (!data[id]) data[id] = { balance: 0, earned: [] };
-  return data[id];
+async function getUser(id) {
+  let user = await users.findOne({ id });
+  if (!user) {
+    user = { id, balance: 0, earned: [] };
+    await users.insertOne(user);
+  }
+  return user;
 }
 
 // ===== АНТИНАКРУТКА =====
-function canEarn(id, amount) {
-  const u = getUser(id);
+async function canEarn(id, amount) {
+  const user = await getUser(id);
   const now = Date.now();
 
-  u.earned = u.earned.filter(e => now - e.time < 10 * 60 * 1000);
-  const total = u.earned.reduce((s, e) => s + e.amount, 0);
+  const earned = user.earned
+    .filter(e => now - e.time < 10 * 60 * 1000)
+    .slice(-20);
 
+  const total = earned.reduce((s, e) => s + e.amount, 0);
   if (total + amount > 50) return false;
 
-  u.earned.push({ amount, time: now });
+  earned.push({ amount, time: now });
+
+  await users.updateOne(
+    { id },
+    { $set: { earned } }
+  );
+
   return true;
 }
 
-// ===== ЛОГИ =====
+// ===== LOGS =====
 function log(guild, title, text, color = 0xf1c40f) {
-  const ch = guild.channels.cache.find(c => c.name === "bar-logs");
+  if (!LOG_CHANNEL_ID) return;
+  const ch = guild.channels.cache.get(LOG_CHANNEL_ID);
   if (!ch) return;
 
   ch.send({
-    embeds: [new EmbedBuilder()
-      .setTitle(title)
-      .setDescription(text)
-      .setColor(color)
-      .setTimestamp()
+    embeds: [
+      new EmbedBuilder()
+        .setTitle(title)
+        .setDescription(text)
+        .setColor(color)
+        .setTimestamp()
     ]
   });
 }
 
-// ===== НАПИТКИ =====
+// ===== COOLDOWN =====
+const cooldown = new Set();
+function onCooldown(id) {
+  if (cooldown.has(id)) return true;
+  cooldown.add(id);
+  setTimeout(() => cooldown.delete(id), 3000);
+  return false;
+}
+
+// ===== BOT OWNER CHECK =====
+function isBotOwner(m) {
+  return m.author.id === BOT_OWNER_ID;
+}
+
+// ===== DRINKS =====
 const drinks = {
   пиво: [1, 3],
   водка: [3, 6],
   виски: [2, 5],
   ром: [2, 4],
-  самогон: [0, 8]
+  самогон: [-3, 8]
 };
 
+// ===== READY =====
 client.once("ready", () => {
-  console.log("🍻 Бармен (prefix) запущен");
+  console.log("🍻 Бар-бот запущен");
   client.user.setActivity("наливает 🍺");
 });
 
 // ===== COMMANDS =====
 client.on("messageCreate", async (m) => {
-  if (m.author.bot || !m.content.startsWith(prefix)) return;
+  if (m.author.bot || !m.content.startsWith(PREFIX)) return;
+  if (onCooldown(m.author.id)) return;
 
   const args = m.content.slice(1).trim().split(/ +/);
   const cmd = args.shift().toLowerCase();
-  const u = getUser(m.author.id);
 
   // 🍹 ВЫПИТЬ
   if (cmd === "выпить") {
-    const name = args[0] || Object.keys(drinks)[Math.floor(Math.random() * 5)];
+    const name = args[0] || Object.keys(drinks)[Math.floor(Math.random() * Object.keys(drinks).length)];
     if (!drinks[name]) return m.reply("Такого пойла нет 🍺");
 
     const [min, max] = drinks[name];
     const gain = Math.floor(Math.random() * (max - min + 1)) + min;
 
-    if (gain > 0 && !canEarn(m.author.id, gain)) {
-      log(m.guild, "🛑 Антинакрутка",
-        `👤 ${m.author.tag}\nПопытка +${gain} 🍺`, 0xe74c3c);
-      return m.reply("🛑 Хватит фармить.");
+    if (gain > 0 && !(await canEarn(m.author.id, gain))) {
+      log(m.guild, "🛑 Антинакрутка", `👤 ${m.author.tag}\nПопытка +${gain} 🍺`, 0xe74c3c);
+      return m.reply("🛑 Притормози.");
     }
 
-    u.balance = Math.max(0, u.balance + gain);
-    save();
+    await users.updateOne(
+      { id: m.author.id },
+      { $inc: { balance: gain } },
+      { upsert: true }
+    );
+
+    const user = await getUser(m.author.id);
+    if (user.balance < 0)
+      await users.updateOne({ id: m.author.id }, { $set: { balance: 0 } });
 
     m.reply(`🍹 ${name} → **${gain} 🍺**`);
-    log(m.guild, "🍹 Выпивка", `👤 ${m.author.tag}\n${name} | ${gain}`);
   }
 
   // 💰 БАЛАНС
   if (cmd === "баланс") {
-    return m.reply(`💰 У тебя **${u.balance} 🍺**`);
+    const user = await getUser(m.author.id);
+    return m.reply(`💰 У тебя **${user.balance} 🍺**`);
   }
 
   // 🎡 РУЛЕТКА
   if (cmd === "рулетка") {
     const bet = parseInt(args[0]);
-    if (!bet || bet <= 0 || bet > u.balance)
-      return m.reply("Ставка хуйня.");
+    const user = await getUser(m.author.id);
+
+    if (!bet || bet <= 0 || bet > user.balance)
+      return m.reply("Ставка говно.");
 
     const win = Math.random() < 0.5;
-    u.balance += win ? bet : -bet;
-    save();
-
-    m.reply(win ? `🎡 +${bet} 🍺` : `💀 -${bet} 🍺`);
-    log(m.guild, "🎡 Рулетка",
-      `👤 ${m.author.tag}\nСтавка ${bet}\n${win ? "WIN" : "LOSE"}`,
-      win ? 0x2ecc71 : 0xe74c3c
+    await users.updateOne(
+      { id: m.author.id },
+      { $inc: { balance: win ? bet : -bet } }
     );
-  }
 
-  // 🎰 СЛОТЫ
-  if (cmd === "слоты") {
-    const bet = parseInt(args[0]);
-    if (!bet || bet <= 0 || bet > u.balance)
-      return m.reply("Ставка мимо.");
-
-    const symbols = ["🍒", "🍋", "🍺"];
-    const roll = symbols.map(() => symbols[Math.floor(Math.random() * 3)]);
-
-    let result = -bet;
-    if (roll[0] === roll[1] && roll[1] === roll[2]) result = bet * 5;
-    else if (roll[0] === roll[1] || roll[1] === roll[2]) result = bet * 2;
-
-    u.balance = Math.max(0, u.balance + result);
-    save();
-
-    m.reply(`🎰 ${roll.join(" | ")} → **${result} 🍺**`);
+    m.reply(win ? `🎡 WIN → +${bet} 🍺` : `💀 LOSE → -${bet} 🍺`);
   }
 
   // 🎲 КОСТИ
   if (cmd === "кости") {
     const bet = parseInt(args[0]);
-    if (!bet || bet <= 0 || bet > u.balance)
-      return m.reply("Ставка говно.");
+    const user = await getUser(m.author.id);
+
+    if (!bet || bet <= 0 || bet > user.balance)
+      return m.reply("Ставка хуйня.");
 
     const you = Math.floor(Math.random() * 6) + 1;
     const bot = Math.floor(Math.random() * 6) + 1;
 
-    let result = 0;
-    if (you > bot) result = bet;
-    else if (you < bot) result = -bet;
+    let diff = 0;
+    if (you > bot) diff = bet;
+    else if (you < bot) diff = -bet;
 
-    u.balance = Math.max(0, u.balance + result);
-    save();
+    await users.updateOne(
+      { id: m.author.id },
+      { $inc: { balance: diff } }
+    );
 
-    m.reply(`🎲 Ты ${you} | Бармен ${bot} → **${result} 🍺**`);
+    m.reply(`🎲 Ты ${you} | Бармен ${bot} → **${diff} 🍺**`);
   }
 
   // 🏆 ТОП
   if (cmd === "топ") {
-    const top = Object.entries(data)
-      .sort((a, b) => b[1].balance - a[1].balance)
-      .slice(0, 5);
-
+    const top = await users.find().sort({ balance: -1 }).limit(5).toArray();
     let text = "";
+
     for (let i = 0; i < top.length; i++) {
-      const usr = await client.users.fetch(top[i][0]);
-      text += `**${i + 1}.** ${usr.username} — ${top[i][1].balance} 🍺\n`;
+      let name = "Удалённый";
+      try {
+        const usr = await client.users.fetch(top[i].id);
+        name = usr.username;
+      } catch {}
+      text += `**${i + 1}.** ${name} — ${top[i].balance} 🍺\n`;
     }
 
     m.channel.send({
-      embeds: [new EmbedBuilder()
-        .setTitle("🏆 Топ алкашей")
-        .setDescription(text)
-        .setColor(0xf1c40f)]
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🏆 Топ алкашей")
+          .setDescription(text || "Пусто")
+          .setColor(0xf1c40f)
+      ]
     });
+  }
+
+  // 🎭 РОЛИ (ТОЛЬКО СОЗДАТЕЛЬ БОТА)
+  if (cmd === "роль") {
+    if (!isBotOwner(m)) return m.reply("❌ Только создатель бота.");
+
+    const action = args[0];
+    const member = m.mentions.members.first();
+    const role = m.mentions.roles.first();
+
+    if (!action || !member || !role)
+      return m.reply("Используй: `!роль дать|забрать @user @role`");
+
+    if (action === "дать") {
+      await member.roles.add(role);
+      return m.reply(`✅ Роль **${role.name}** выдана ${member.user.tag}`);
+    }
+
+    if (action === "забрать") {
+      await member.roles.remove(role);
+      return m.reply(`✅ Роль **${role.name}** забрана у ${member.user.tag}`);
+    }
+  }
+
+  // 🛡️ ПРАВА РОЛЕЙ (ТОЛЬКО СОЗДАТЕЛЬ БОТА)
+  if (cmd === "права") {
+    if (!isBotOwner(m)) return m.reply("❌ Только создатель бота.");
+
+    const action = args[0];
+    const role = m.mentions.roles.first();
+    const perm = args[2];
+
+    if (!action || !role || !perm)
+      return m.reply("Используй: `!права дать|забрать @role PERMISSION`");
+
+    if (!PermissionsBitField.Flags[perm])
+      return m.reply("❌ Такого права не существует.");
+
+    const perms = new PermissionsBitField(role.permissions);
+
+    if (action === "дать") perms.add(PermissionsBitField.Flags[perm]);
+    else if (action === "забрать") perms.remove(PermissionsBitField.Flags[perm]);
+    else return m.reply("❌ Действие: дать / забрать");
+
+    await role.setPermissions(perms);
+    return m.reply(`✅ Право **${perm}** ${action} роли **${role.name}**`);
   }
 });
 
-client.login(process.env.TOKEN);
+// ===== START =====
+(async () => {
+  await initMongo();
+  await client.login(TOKEN);
+})();
