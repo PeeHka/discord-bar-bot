@@ -219,12 +219,42 @@ client.on("interactionCreate", async i => {
     return i.reply(`🍻 ${item}: ${gain} → ${u.drinks}`);
   }
 
-  if (i.commandName === "топ") {
-    const list = await db.collection("users").find().sort({ drinks:-1 }).limit(10).toArray();
-    let t="🏆 Топ:\n\n";
-    list.forEach((x,i)=>t+=`${i+1}. <@${x.id}> — ${x.drinks} 🍺 (${x.title})\n`);
-    return i.reply(t);
+ if (i.commandName === "топ") {
+  const col = db.collection("users");
+
+  const list = await col
+    .find({})
+    .sort({ drinks: -1 })
+    .limit(10)
+    .toArray();
+
+  let t = "🏆 **Топ алкашей**\n\n";
+
+  for (let index = 0; index < list.length; index++) {
+    const x = list[index];
+
+    // 🔥 ФИКС undefined
+    if (typeof x.drinks !== "number") {
+      x.drinks = 0;
+      await col.updateOne(
+        { id: x.id },
+        { $set: { drinks: 0 } }
+      );
+    }
+
+    if (!x.title) {
+      x.title = "Новичок";
+      await col.updateOne(
+        { id: x.id },
+        { $set: { title: "Новичок" } }
+      );
+    }
+
+    t += `${index + 1}. <@${x.id}> — **${x.drinks} 🍺** (${x.title})\n`;
   }
+
+  return i.reply({ content: t });
+}
 
   if (i.commandName === "help")
     return i.reply("/баланс /выпить /казино /кости /магазин /купить /топ");
