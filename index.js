@@ -1,8 +1,7 @@
 const {
   Client,
   GatewayIntentBits,
-  PermissionsBitField,
-  EmbedBuilder
+  PermissionsBitField
 } = require("discord.js");
 const { MongoClient } = require("mongodb");
 
@@ -13,106 +12,149 @@ const client = new Client({
   ]
 });
 
-// ====== ENV ======
+// ===== ENV =====
 const {
   TOKEN,
   MONGO_URI,
-  BOT_OWNER_ID,
-  LOG_CHANNEL_ID
+  BOT_OWNER_ID
 } = process.env;
 
-// ====== ADMINS (хранятся в Mongo) ======
-let admins = new Set([BOT_OWNER_ID]);
-
-// ====== Mongo ======
+// ===== Mongo =====
 let db;
+const admins = new Set([BOT_OWNER_ID]);
+
 async function connectMongo() {
   const mongo = new MongoClient(MONGO_URI);
   await mongo.connect();
   db = mongo.db("barbot");
   console.log("🍃 MongoDB подключена");
 
-  const adminDocs = await db.collection("admins").find().toArray();
-  adminDocs.forEach(a => admins.add(a.userId));
+  const savedAdmins = await db.collection("admins").find().toArray();
+  savedAdmins.forEach(a => admins.add(a.userId));
 }
 
-// ====== HELPERS ======
-const isAdmin = (id) => admins.has(id);
+// ===== Helpers =====
+function isAdmin(id) {
+  return admins.has(id);
+}
 
-// ====== READY ======
+async function getUser(id) {
+  const col = db.collection("users");
+  let user = await col.findOne({ id });
+  if (!user) {
+    user = { id, drinks: 0 };
+    await col.insertOne(user);
+  }
+  if (typeof user.drinks !== "number") {
+    user.drinks = 0;
+    await col.updateOne({ id }, { $set: { drinks: 0 } });
+  }
+  return user;
+}
+
+// ===== Ready =====
 client.once("ready", () => {
   console.log("🍻 Бар-бот запущен");
 });
 
-// ====== COMMANDS ======
+// ===== Commands =====
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  const { commandName } = interaction;
+  const name = interaction.commandName;
 
-  // ---------- HELP ----------
-  if (commandName === "help") {
+  // ===== HELP =====
+  if (name === "help") {
     return interaction.reply(
 `🍺 **Команды бара**
 /баланс — твой баланс
-/выпить — бухнуть
+/выпить — выпить напиток
+/казино — сыграть в казино
 /кости — бросить кости
-/казино — рискнуть
-/топ — топ алкашей
-/help — это меню`
+/топ — топ алкашей`
     );
   }
 
-  // ---------- ECONOMY ----------
-  if (commandName === "баланс") {
-    const col = db.collection("users");
-    let user = await col.findOne({ id: interaction.user.id });
-    if (!user) {
-      user = { id: interaction.user.id, drinks: 0 };
-      await col.insertOne(user);
-    }
-    return interaction.reply(`🍺 У тебя **${user.drinks}** напитков`);
+  // ===== BALANCE =====
+  if (name === "баланс") {
+    const user = await getUser(interaction.user.id);
+    return interaction.reply(`💰 У тебя **${user.drinks} 🍺**`);
   }
 
-  if (commandName === "выпить") {
+  // ===== DRINK =====
+  if (name === "выпить") {
     const col = db.collection("users");
     await col.updateOne(
       { id: interaction.user.id },
       { $inc: { drinks: 1 } },
       { upsert: true }
     );
-    return interaction.reply("🥃 Ты выпил. Хорош!");
+    return interaction.reply("🥃 Ты выпил и получил **+1 🍺**");
   }
 
-  if (commandName === "топ") {
+  // ===== CASINO =====
+  if (name === "казино") {
+    const user = await getUser(interaction.user.id);
+    const win = Math.random() < 0.45;
+    const amount = Math.floor(Math.random() * 5) + 1;
+
+    const col = db.collection("users");
+
+    if (win) {
+      await col.updateOne(
+        { id: interaction.user.id },
+        { $inc: { drinks: amount } }
+      );
+      return interaction.reply(`🎰 Ты **выиграл +${amount} 🍺**`);
+    } else {
+      const loss = Math.min(amount, user.drinks);
+      await col.updateOne(
+        { id: interaction.user.id },
+        { $inc: { drinks: -loss } }
+      );
+      return interaction.reply(`💸 Ты **проиграл -${loss} 🍺**`);
+    }
+  }
+
+  // ===== DICE =====
+  if (name === "кости") {
+    const you = Math.floor(Math.random() * 6) + 1;
+    const bot = Math.floor(Math.random() * 6) + 1;
+
+    let result = 0;
+    if (you > bot) result = 1;
+    if (you < bot) result = -1;
+
+    await db.collection("users").updateOne(
+      { id: interaction.user.id },
+      { $inc: { drinks: result } },
+      { upsert: true }
+    );
+
+    return interaction.reply(
+      `🎲 Ты: **${you}** | Бармен: **${bot}**\nРезультат: **${result >= 0 ? "+" : ""}${result} 🍺**`
+    );
+  }
+
+  // ===== TOP =====
+  if (name === "топ") {
     const users = await db.collection("users")
       .find().sort({ drinks: -1 }).limit(10).toArray();
 
-    let text = "🍻 **Топ алкашей**\n\n";
+    let text = "🏆 **Топ алкашей**\n\n";
     users.forEach((u, i) => {
-      text += `${i + 1}. <@${u.id}> — ${u.drinks} 🍺\n`;
+      const drinks = typeof u.drinks === "number" ? u.drinks : 0;
+      text += `${i + 1}. <@${u.id}> — ${drinks} 🍺\n`;
     });
 
     return interaction.reply(text);
   }
 
-  if (commandName === "кости") {
-    const roll = Math.floor(Math.random() * 6) + 1;
-    return interaction.reply(`🎲 Выпало **${roll}**`);
-  }
-
-  if (commandName === "казино") {
-    const win = Math.random() < 0.45;
-    return interaction.reply(
-      win ? "🎰 Ты выиграл 🍀" : "💸 Ты проиграл"
-    );
-  }
-
-  // ---------- ROLE COMMANDS (ADMIN ONLY) ----------
-  if (["роль_выдать", "роль_забрать"].includes(commandName)) {
+  // ===== ROLE COMMANDS =====
+  if (["роль_выдать", "роль_забрать"].includes(name)) {
     if (!isAdmin(interaction.user.id)) {
       return interaction.reply({
-        content: "❌ Только админы бота.",
+        content: "❌ Нет прав.",
         ephemeral: true
       });
     }
@@ -120,7 +162,7 @@ client.on("interactionCreate", async (interaction) => {
     const member = interaction.options.getMember("пользователь");
     const role = interaction.options.getRole("роль");
 
-    if (commandName === "роль_выдать") {
+    if (name === "роль_выдать") {
       await member.roles.add(role);
       return interaction.reply({
         content: `✅ Роль **${role.name}** выдана`,
@@ -128,7 +170,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    if (commandName === "роль_забрать") {
+    if (name === "роль_забрать") {
       await member.roles.remove(role);
       return interaction.reply({
         content: `❌ Роль **${role.name}** забрана`,
@@ -137,13 +179,10 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  // ---------- ADMIN MANAGE ----------
-  if (commandName === "admin_add") {
+  // ===== ADMIN ADD / DELETE =====
+  if (name === "admin_add") {
     if (interaction.user.id !== BOT_OWNER_ID) {
-      return interaction.reply({
-        content: "❌ Только овнер бота.",
-        ephemeral: true
-      });
+      return interaction.reply({ content: "❌ Только овнер.", ephemeral: true });
     }
 
     const user = interaction.options.getUser("пользователь");
@@ -154,32 +193,23 @@ client.on("interactionCreate", async (interaction) => {
       { upsert: true }
     );
 
-    return interaction.reply({
-      content: `✅ <@${user.id}> добавлен в админы`,
-      ephemeral: true
-    });
+    return interaction.reply({ content: "✅ Админ добавлен", ephemeral: true });
   }
 
-  if (commandName === "admin_delete") {
+  if (name === "admin_delete") {
     if (interaction.user.id !== BOT_OWNER_ID) {
-      return interaction.reply({
-        content: "❌ Только овнер бота.",
-        ephemeral: true
-      });
+      return interaction.reply({ content: "❌ Только овнер.", ephemeral: true });
     }
 
     const user = interaction.options.getUser("пользователь");
     admins.delete(user.id);
     await db.collection("admins").deleteOne({ userId: user.id });
 
-    return interaction.reply({
-      content: `🗑 <@${user.id}> удалён из админов`,
-      ephemeral: true
-    });
+    return interaction.reply({ content: "🗑 Админ удалён", ephemeral: true });
   }
 });
 
-// ====== START ======
+// ===== START =====
 (async () => {
   await connectMongo();
   await client.login(TOKEN);
