@@ -1,0 +1,15 @@
+const { SlashCommandBuilder } = require("discord.js");
+const { users } = require("../database");
+module.exports = {
+  data: new SlashCommandBuilder().setName("купить").setDescription("Купить предмет")
+    .addStringOption(o=>o.setName("предмет").setRequired(true)),
+  async execute(i){
+    const item=i.options.getString("предмет");
+    const prices={бонус:50,защита:75};
+    if(!prices[item]) return i.reply({content:"❌ Нет такого предмета",ephemeral:true});
+    const u=await users().findOne({id:i.user.id})||{balance:0,inv:[]};
+    if(u.balance<prices[item]) return i.reply({content:"❌ Недостаточно средств",ephemeral:true});
+    await users().updateOne({id:i.user.id},{$inc:{balance:-prices[item]},$push:{inv:item}},{upsert:true});
+    await i.reply(`🛒 Куплено: **${item}**`);
+  }
+};
