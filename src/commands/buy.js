@@ -6,36 +6,74 @@ module.exports = {
 
 data: new SlashCommandBuilder()
 .setName("buy")
-.setDescription("Купить предмет")
-.addStringOption(o=>o.setName("item").setRequired(true))
-.addIntegerOption(o=>o.setName("amount").setRequired(true)),
+.setDescription("Купить предмет из магазина")
+
+.addStringOption(o =>
+  o.setName("item")
+   .setDescription("Название предмета")
+   .setRequired(true)
+)
+
+.addIntegerOption(o =>
+  o.setName("amount")
+   .setDescription("Количество для покупки")
+   .setRequired(true)
+),
 
 async execute(interaction){
 
-const key=interaction.options.getString("item");
-const amount=interaction.options.getInteger("amount");
+const key = interaction.options.getString("item");
+const amount = interaction.options.getInteger("amount");
 
-const item=shop.items[key];
+if(amount <= 0)
+return interaction.reply({
+content: "❌ Количество должно быть больше 0",
+ephemeral: true
+});
+
+const item = shop.items[key];
 
 if(!item)
-return interaction.reply({content:"❌ Нет предмета",ephemeral:true});
+return interaction.reply({
+content: "❌ Такого предмета нет",
+ephemeral: true
+});
 
-let user=await users().findOne({id:interaction.user.id})||{balance:0,inventory:{}};
+let user = await users().findOne({ id: interaction.user.id });
 
-const price=item.price*amount;
+if(!user){
+user = {
+id: interaction.user.id,
+balance: 0,
+inventory: {}
+};
+}
 
-if(user.balance<price)
-return interaction.reply({content:"❌ Недостаточно денег",ephemeral:true});
+if(!user.inventory)
+user.inventory = {};
 
-user.inventory[key]=(user.inventory[key]||0)+amount;
+const price = item.price * amount;
+
+if(user.balance < price)
+return interaction.reply({
+content: `❌ Нужно ${price} 🍺, у тебя ${user.balance} 🍺`,
+ephemeral: true
+});
+
+user.inventory[key] = (user.inventory[key] || 0) + amount;
 
 await users().updateOne(
-{id:interaction.user.id},
-{$set:{inventory:user.inventory},$inc:{balance:-price}},
-{upsert:true}
+{ id: interaction.user.id },
+{
+$set: { inventory: user.inventory },
+$inc: { balance: -price }
+},
+{ upsert: true }
 );
 
-await interaction.reply(`✅ Куплено ${amount} × ${key}`);
+await interaction.reply(
+`✅ Куплено ${amount} × ${item.name} за ${price} 🍺`
+);
 
 }
 
