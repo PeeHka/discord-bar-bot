@@ -3,53 +3,81 @@ const { users } = require("../database");
 const shop = require("../shop-data");
 const { rand } = require("../economy-utils");
 
-module.exports={
+module.exports = {
 
-data:new SlashCommandBuilder()
+data: new SlashCommandBuilder()
 .setName("use")
 .setDescription("Использовать предмет")
-.addStringOption(o=>o.setName("item").setRequired(true)),
+
+.addStringOption(o =>
+  o.setName("item")
+   .setDescription("Название предмета")
+   .setRequired(true)
+),
 
 async execute(interaction){
 
-const key=interaction.options.getString("item");
+const key = interaction.options.getString("item");
 
-const item=shop.items[key];
+const item = shop.items[key];
 
 if(!item)
-return interaction.reply("❌ Нет предмета");
+return interaction.reply({
+content: "❌ Такого предмета нет",
+ephemeral: true
+});
 
-let user=await users().findOne({id:interaction.user.id});
+let user = await users().findOne({ id: interaction.user.id });
 
-if(!user?.inventory?.[key])
-return interaction.reply("❌ Нет предмета");
+if(!user || !user.inventory || !user.inventory[key] || user.inventory[key] <= 0)
+return interaction.reply({
+content: "❌ У тебя нет этого предмета",
+ephemeral: true
+});
 
-if(key==="beer_box"){
 
-const gain=rand(20,60);
+// 🍺 beer_box
+if(key === "beer_box"){
+
+const gain = rand(20, 60);
+
+user.inventory[key]--;
 
 await users().updateOne(
-{id:user.id},
+{ id: user.id },
 {
-$inc:{balance:gain},
-$set:{[`inventory.${key}`]:user.inventory[key]-1}
+$set: { inventory: user.inventory },
+$inc: { balance: gain }
 }
 );
 
-return interaction.reply(`🍺 Получено ${gain} 🍺`);
+return interaction.reply(
+`🍺 Ты открыл ящик и получил ${gain} 🍺`
+);
 
 }
 
-if(key==="shield"){
+
+// 🛡 shield
+if(key === "shield"){
+
+user.inventory[key]--;
 
 await users().updateOne(
-{id:user.id},
-{$set:{[`inventory.${key}`]:user.inventory[key]-1}}
+{ id: user.id },
+{
+$set: { inventory: user.inventory }
+}
 );
 
-return interaction.reply("🛡 Щит активирован");
+return interaction.reply(
+"🛡 Щит активирован. Он спасёт тебя от следующего проигрыша."
+);
 
 }
+
+
+return interaction.reply("❌ Этот предмет нельзя использовать");
 
 }
 
