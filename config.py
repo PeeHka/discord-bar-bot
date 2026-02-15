@@ -1,0 +1,10 @@
+import os
+
+TOKEN = os.getenv("TOKEN")
+MONGO_URI = os.getenv("MONGO_URI")
+
+START_BALANCE = 500
+CURRENCY = "$"
+
+PASSIVE_INTERVAL = 600
+INTEREST_INTERVAL = 3600
